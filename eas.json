@@ -4,11 +4,17 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "WHISPER_MODEL_URL": "https://github.com/charyzhai/rabbit/releases/download/v1.0.0/ggml-tiny.en.bin"
       }
     },
     "production": {
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "WHISPER_MODEL_URL": "https://github.com/charyzhai/rabbit/releases/download/v1.0.0/ggml-tiny.en.bin"
       }
     }
   }
