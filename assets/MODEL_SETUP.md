@@ -47,7 +47,7 @@ pnpm ensure-model
 eas build -p android --profile preview
 ```
 
-下载源优先级：环境变量 `WHISPER_MODEL_URL` → 否则 HuggingFace 官方 `tiny.en`。
+下载源优先级：环境变量 `WHISPER_MODEL_URL` → 否则依次 HuggingFace 官方源 → `hf-mirror.com` 国内镜像（任一成功即采用，提高国内构建成功率）。
 
 **默认下载源：HuggingFace 官方 `tiny.en`（开箱即用，无需 Release）**
 当前 `eas.json` 不设 `WHISPER_MODEL_URL`，EAS 构建时钩子自动从
@@ -72,7 +72,8 @@ export GH_TOKEN="<github_pat>"
 ```
 
 > 脚本逻辑：已存在且大小正常则跳过；下载到 `.part` 临时文件再原子改名；
-> 设 `WHISPER_MODEL_SHA256` 可开启完整性校验。
+> 多源回退（HF 直连失败自动换镜像）；对 `ggml-tiny.en.bin` **已内置 SHA256 校验**（无需设环境变量），
+> 换其它模型可设 `WHISPER_MODEL_SHA256` 覆盖；下载同时做 `content-length` 大小守卫，截断即换下一源重试。
 
 > **换模型要改三个地方**（文件名必须一致）：
 > `assets/models/<文件>`、`lib/whisper-speech.ts` 的 `MODEL_FILE_NAME`、

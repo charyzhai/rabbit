@@ -9,11 +9,13 @@
  *   - 目标落盘：<projectRoot>/assets/models/<WHISPER_MODEL_FILE，默认 ggml-tiny.en.bin>
  *   - 已存在且大小正常则跳过（省流量，也兼容本地已放好模型的场景）
  *   - 下载到临时文件再原子改名，避免半截文件被 with-whisper-model 插件拷进 APK
- *   - 可选 SHA256 校验（设 WHISPER_MODEL_SHA256 才校验）
+ *   - 默认对已知模型做 SHA256 校验（tiny.en 内置哈希；其它模型可设 WHISPER_MODEL_SHA256 覆盖）
+ *   - 多源回退：默认依次尝试 HuggingFace 官方源 + 国内可达镜像 hf-mirror.com，
+ *     任一成功即采用；用户显式设 WHISPER_MODEL_URL 时仅用该源（不走镜像）。
  *
- * 下载源（按优先级）：
- *   1) 环境变量 WHISPER_MODEL_URL（可指向你自己的 GitHub Release 资产，最推荐）
- *   2) 否则用 HuggingFace 官方 tiny.en（公开、无需登录）
+ * 下载源优先级：
+ *   1) 环境变量 WHISPER_MODEL_URL（用户自托管 / 私有 GitHub Release 资产，仅用此源）
+ *   2) 否则：HuggingFace 官方 tiny.en → hf-mirror.com 镜像（回退）
  *
  * 鉴权：
  *   - 私有 GitHub 仓库的 Release 资产直链会 302 跳转到 objects.githubusercontent.com，
@@ -44,11 +46,24 @@ const MODEL_DIR = join(projectRoot, "assets", "models");
 const DEST = join(MODEL_DIR, MODEL_FILE);
 const TMP = DEST + ".part";
 
-const DEFAULT_URL =
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-const MODEL_URL = process.env.WHISPER_MODEL_URL || DEFAULT_URL;
-const EXPECTED_SHA256 = (process.env.WHISPER_MODEL_SHA256 || "").toLowerCase();
+// 默认源 + 国内可达镜像。用户在国内，HuggingFace 直连可能不稳定，加镜像提高构建成功率。
+const MIRRORS = [
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+  "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+];
+
+// 已知模型的内置 SHA256：未显式设 WHISPER_MODEL_SHA256 且文件名命中时，自动校验
+// （换 base.en 等其它模型时，本表无对应项则跳过校验，或自行设 WHISPER_MODEL_SHA256）。
+const KNOWN_SHA256 = {
+  "ggml-tiny.en.bin": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+};
+
 const GH_TOKEN = process.env.GH_TOKEN || "";
+const EXPECTED_SHA256 = (
+  process.env.WHISPER_MODEL_SHA256 ||
+  KNOWN_SHA256[MODEL_FILE] ||
+  ""
+).toLowerCase();
 
 /**
  * 解析最终下载地址与请求头。
@@ -108,61 +123,87 @@ if (existsSync(DEST) && statSync(DEST).size > 1_000_000) {
 
 mkdirSync(MODEL_DIR, { recursive: true });
 
-console.log(`[whisper-model] 下载: ${MODEL_URL}`);
-console.log(`[whisper-model] 落盘: ${DEST}`);
+// 用户显式指定源时只用该源；否则用默认源 + 镜像回退列表
+const candidates = process.env.WHISPER_MODEL_URL
+  ? [process.env.WHISPER_MODEL_URL]
+  : MIRRORS;
 
-let res;
-try {
-  const { url: finalUrl, headers } = await resolveModelUrl(MODEL_URL);
-  console.log(`[whisper-model] 最终地址: ${finalUrl}`);
-  res = await fetch(finalUrl, { redirect: "follow", headers });
-} catch (err) {
-  console.error(`[whisper-model] 请求失败：${err?.message || err}`);
-  process.exit(1);
-}
-if (!res.ok || !res.body) {
-  console.error(`[whisper-model] HTTP ${res.status} ${res.statusText}，下载失败。`);
-  process.exit(1);
-}
+let success = false;
+let lastErr = "";
 
-const total = Number(res.headers.get("content-length") || 0);
-const hasher = createHash("sha256");
-let received = 0;
-
-const fh = await open(TMP, "w");
-try {
-  const reader = res.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value && value.byteLength) {
-      await fh.write(value);
-      hasher.update(value);
-      received += value.byteLength;
-      if (total) {
-        const pct = ((received / total) * 100).toFixed(0);
-        process.stdout.write(
-          `\r[whisper-model] ${pct}%  (${(received / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB)`
-        );
-      }
+for (const rawUrl of candidates) {
+  try {
+    console.log(`[whisper-model] 尝试源: ${rawUrl}`);
+    const { url: finalUrl, headers } = await resolveModelUrl(rawUrl);
+    const res = await fetch(finalUrl, { redirect: "follow", headers });
+    if (!res.ok || !res.body) {
+      console.warn(`[whisper-model] HTTP ${res.status} ${res.statusText}，换下一源。`);
+      lastErr = `HTTP ${res.status}`;
+      continue;
     }
-  }
-} finally {
-  await fh.close();
-}
-if (total) process.stdout.write("\n");
 
-if (EXPECTED_SHA256) {
-  const actual = hasher.digest("hex");
-  if (actual !== EXPECTED_SHA256) {
-    console.error(`[whisper-model] SHA256 校验失败：期望 ${EXPECTED_SHA256}，实际 ${actual}。删除临时文件。`);
-    unlinkSync(TMP);
-    process.exit(1);
+    const total = Number(res.headers.get("content-length") || 0);
+    const hasher = createHash("sha256");
+    let received = 0;
+
+    const fh = await open(TMP, "w");
+    try {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.byteLength) {
+          await fh.write(value);
+          hasher.update(value);
+          received += value.byteLength;
+          if (total) {
+            const pct = ((received / total) * 100).toFixed(0);
+            process.stdout.write(
+              `\r[whisper-model] ${pct}%  (${(received / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB)`
+            );
+          }
+        }
+      }
+    } finally {
+      await fh.close();
+    }
+    if (total) process.stdout.write("\n");
+
+    // 大小守卫：与 content-length 不一致说明下载被截断，换下一源
+    if (total && received !== total) {
+      console.warn(`[whisper-model] 大小不符（实际 ${received} != 期望 ${total}），换下一源。`);
+      lastErr = "size mismatch";
+      try { unlinkSync(TMP); } catch {}
+      continue;
+    }
+
+    // SHA256 校验（默认对已知模型启用；也可 env 覆盖）
+    if (EXPECTED_SHA256) {
+      const actual = hasher.digest("hex");
+      if (actual !== EXPECTED_SHA256) {
+        console.error(`[whisper-model] SHA256 校验失败：期望 ${EXPECTED_SHA256}，实际 ${actual}。换下一源。`);
+        lastErr = "sha256 mismatch";
+        try { unlinkSync(TMP); } catch {}
+        continue;
+      }
+      console.log(`[whisper-model] SHA256 校验通过。`);
+    }
+
+    renameSync(TMP, DEST);
+    console.log(
+      `[whisper-model] 完成：${DEST}（${(received / 1024 / 1024).toFixed(1)} MB）`
+    );
+    success = true;
+    break;
+  } catch (err) {
+    console.warn(`[whisper-model] 下载失败：${err?.message || err}，换下一源。`);
+    lastErr = err?.message || String(err);
+    try { unlinkSync(TMP); } catch {}
+    continue;
   }
-  console.log(`[whisper-model] SHA256 校验通过。`);
 }
 
-renameSync(TMP, DEST);
-console.log(
-  `[whisper-model] 完成：${DEST}（${(received / 1024 / 1024).toFixed(1)} MB）`
-);
+if (!success) {
+  console.error(`[whisper-model] 所有源均失败（最后错误：${lastErr}）。`);
+  process.exit(1);
+}

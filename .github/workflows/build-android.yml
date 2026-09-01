@@ -40,5 +40,3 @@ jobs:
             --profile preview \
             --non-interactive \
             --no-wait
-        env:
-          EXPO_DOCTOR_SKIP: 1   # 锁文件已统一为 pnpm，expo doctor 本应通过；此行为兜底，可删

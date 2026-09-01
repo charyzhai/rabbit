@@ -18,6 +18,7 @@ import type { EdgeInsets, Metrics, Rect } from "react-native-safe-area-context";
 
 import { trpc, createTRPCClient } from "@/lib/trpc";
 import { initManusRuntime, subscribeSafeAreaInsets } from "@/lib/_core/manus-runtime";
+import { ensureWhisperModel } from "@/lib/whisper-speech";
 import { ActivationGate } from "@/components/activation-gate";
 
 const DEFAULT_WEB_INSETS: EdgeInsets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -37,6 +38,13 @@ export default function RootLayout() {
   // Initialize Manus runtime for cookie injection from parent container
   useEffect(() => {
     initManusRuntime();
+  }, []);
+
+  // 启动后预加载 Whisper 模型（非阻塞）：避免首次「开始朗读」被 75MB 模型加载卡住。
+  // 模型不可用（Expo Go / web / 未 prebuild）时 ensureWhisperModel 内部已捕获异常，安全无副作用。
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    ensureWhisperModel().catch(() => {});
   }, []);
 
   const handleSafeAreaUpdate = useCallback((metrics: Metrics) => {
