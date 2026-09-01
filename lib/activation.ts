@@ -46,7 +46,9 @@ export type TrialStatus = {
 
 // 对「激活码 + 盐」做 SHA-256，返回十六进制
 function hashCode(input: string): string {
-  return bytesToHex(sha256(input + PEPPER));
+  // @noble/hashes 2.4.0+ 要求 Uint8Array 输入，必须用 TextEncoder 把字符串转字节，
+  // 否则 sha256(字符串) 抛 TypeError，导致 activate() 永远失败。
+  return bytesToHex(sha256(new TextEncoder().encode(input + PEPPER)));
 }
 
 // 常量时间比较，降低计时侧信道风险
