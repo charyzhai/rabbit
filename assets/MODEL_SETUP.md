@@ -49,9 +49,16 @@ eas build -p android --profile preview
 
 下载源优先级：环境变量 `WHISPER_MODEL_URL` → 否则 HuggingFace 官方 `tiny.en`。
 
-**推荐：用自己的 GitHub Release 资产做下载源（最贴合「传 GitHub 再构建」）**
-把 `ggml-tiny.en.bin` 作为**仓库 Release 资产**上传（Release 资产不计入 git 树、单文件上限 2GB，不受 100MB 限制），
-然后构建时指向它：
+**默认下载源：HuggingFace 官方 `tiny.en`（开箱即用，无需 Release）**
+当前 `eas.json` 不设 `WHISPER_MODEL_URL`，EAS 构建时钩子自动从
+`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin` 下载，
+构建机有外网即可，不必在 GitHub 建 Release。
+
+**可选：用 GitHub Release 资产做自托管源**
+> ⚠️ GitHub 网页上传 Release 资产有 **25MB 上限**，77MB 直接拖网页会 publish 失败；
+> 必须走命令行：`gh release create v1.0.0 -t "whisper model" assets/models/ggml-tiny.en.bin`
+> （gh CLI 走 API，可传最大 2GB）。先 `gh auth login`。
+设置方式（构建环境）：
 
 ```bash
 # 公开仓库：直接设下载地址
