@@ -1,0 +1,1 @@
+ALTER TABLE `encrypted_sync_packs` ADD `expiresAt` timestamp NOT NULL;
