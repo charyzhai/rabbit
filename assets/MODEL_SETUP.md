@@ -59,6 +59,9 @@ export WHISPER_MODEL_URL="https://github.com/<你>/<仓库>/releases/download/v1
 
 # 私有仓库：再带一个 token（仅构建环境需要，勿写进代码）
 export GH_TOKEN="<github_pat>"
+#   EAS 云端构建时：把 GH_TOKEN 设为 EAS 项目 Secret（expo.dev 项目设置 → Secrets），
+#   不要在代码或 eas.json 里硬编码。脚本检测到 GH_TOKEN 会自动走 GitHub API
+#   按 tag 解析资产、拿到带签名的可下地址，规避 Release 直链 302 跳转丢鉴权的问题。
 ```
 
 > 脚本逻辑：已存在且大小正常则跳过；下载到 `.part` 临时文件再原子改名；
